@@ -1197,9 +1197,11 @@ export const layer = Layer.effect(
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         const basePrompt = webhook?.prompt ?? active.prompt;
-        const prompt = checkOutput ? `${basePrompt}
+        const prompt = checkOutput
+          ? `${basePrompt}
 
-${checkOutput}` : basePrompt;
+${checkOutput}`
+          : basePrompt;
         const threadMode = scheduledTaskThreadMode(active);
 
         // A bound thread can move to another project (No project to a project) while
@@ -1578,226 +1580,234 @@ ${checkOutput}` : basePrompt;
 
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
-    )(function* (input) {
-      // A webhook task the policy blocks can still be edited while it is off.
-      if (input.enabled && input.schedule.type === "webhook" && webhookPolicyBlock !== undefined) {
-        return yield* taskError(
-          webhookPolicyBlock,
-          input.id === undefined ? {} : { taskId: input.id },
-        );
-      }
-      const now = yield* localNow;
-      const uuid =
-        input.commandId === undefined
-          ? yield* random
-              .uuidV4()
-              .pipe(
-                Effect.mapError((cause) =>
-                  taskError("Could not generate schedule task id.", { cause }),
+    )(
+      function* (input) {
+        // A webhook task the policy blocks can still be edited while it is off.
+        if (
+          input.enabled &&
+          input.schedule.type === "webhook" &&
+          webhookPolicyBlock !== undefined
+        ) {
+          return yield* taskError(
+            webhookPolicyBlock,
+            input.id === undefined ? {} : { taskId: input.id },
+          );
+        }
+        const now = yield* localNow;
+        const uuid =
+          input.commandId === undefined
+            ? yield* random
+                .uuidV4()
+                .pipe(
+                  Effect.mapError((cause) =>
+                    taskError("Could not generate schedule task id.", { cause }),
+                  ),
+                )
+            : null;
+        const id =
+          input.id ??
+          ScheduledTaskId.make(
+            input.commandId ? `scheduled-task:${input.commandId}` : `scheduled-task:${uuid}`,
+          );
+        // Look up by the *resolved* id so idempotent creates (commandId replays)
+        // keep their run history, and so real load failures propagate instead
+        // of silently resetting an existing row.
+        const existingTask = yield* findTask(id);
+        if (input.id === undefined && input.commandId !== undefined && existingTask !== null) {
+          return { task: existingTask };
+        }
+        const threadMode = resolveThreadMode(input, existingTask);
+        const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
+        // A bound thread belongs to its project, so moving the task leaves it for a new one.
+        const movedOffThread =
+          existingTask !== null &&
+          existingTask.projectId !== input.projectId &&
+          keptThreadId === existingTask.threadId;
+        const threadId = threadMode === "new_thread" || movedOffThread ? null : keptThreadId;
+        // An unchanged destination is not rechecked, so a task on an archived thread stays editable.
+        if (threadId !== null && threadId !== existingTask?.threadId) {
+          yield* requireDestinationThread(threadId, input.projectId, id);
+        }
+        // Refused on save rather than at run time; a disabled task can still be saved, so one
+        // stored above the ceiling can be turned off before its mode is lowered. A task bound to a
+        // thread runs in that thread's mode, which the orchestrator checks instead. Checked before
+        // the save consumes a webhook secret.
+        const modeDenial =
+          input.enabled && threadId === null
+            ? managedRuntimeModeDenial(managedPolicy.summary, input.runtimeMode)
+            : undefined;
+        if (modeDenial !== undefined) return yield* taskError(modeDenial, { taskId: id });
+        const creating = existingTask === null && !input.requireExisting;
+        const pausedBots =
+          input.enabled && creating ? yield* pausedBotsForSchedule(id, input.threadId ?? null) : [];
+        if (input.enabled && !creating) {
+          yield* assertBotScheduleCanEnable(id, input.threadId ?? null);
+          if (existingTask !== null) yield* assertBotScheduleCanEnable(id, existingTask.threadId);
+        }
+        // Keep the existing next_run_at when the schedule itself is untouched:
+        // editing a title or prompt must not postpone (or resurrect) a due
+        // run — only schedule/enabled changes restart the clock.
+        const schedule: ScheduledTask["schedule"] =
+          input.schedule.type === "webhook"
+            ? {
+                type: "webhook",
+                signature:
+                  input.schedule.signature == null
+                    ? null
+                    : {
+                        header: input.schedule.signature.header.toLowerCase(),
+                        encoding: input.schedule.signature.encoding,
+                        prefix: input.schedule.signature.prefix,
+                      },
+                maxDeliveryAgeMinutes: input.schedule.maxDeliveryAgeMinutes ?? null,
+                ...(input.schedule.dedupe === undefined
+                  ? existingTask?.schedule.type === "webhook" &&
+                    existingTask.schedule.dedupe !== undefined
+                    ? { dedupe: existingTask.schedule.dedupe }
+                    : {}
+                  : { dedupe: input.schedule.dedupe }),
+                ...webhookFilters(
+                  // Omitted keeps the stored filters, so a client that predates
+                  // them can re-save a task without clearing them.
+                  input.schedule.filters ??
+                    (existingTask?.schedule.type === "webhook"
+                      ? existingTask.schedule.filters
+                      : undefined),
                 ),
-              )
-          : null;
-      const id =
-        input.id ??
-        ScheduledTaskId.make(
-          input.commandId ? `scheduled-task:${input.commandId}` : `scheduled-task:${uuid}`,
-        );
-      // Look up by the *resolved* id so idempotent creates (commandId replays)
-      // keep their run history, and so real load failures propagate instead
-      // of silently resetting an existing row.
-      const existingTask = yield* findTask(id);
-      if (input.id === undefined && input.commandId !== undefined && existingTask !== null) {
-        return { task: existingTask };
-      }
-      const threadMode = resolveThreadMode(input, existingTask);
-      const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
-      // A bound thread belongs to its project, so moving the task leaves it for a new one.
-      const movedOffThread =
-        existingTask !== null &&
-        existingTask.projectId !== input.projectId &&
-        keptThreadId === existingTask.threadId;
-      const threadId = threadMode === "new_thread" || movedOffThread ? null : keptThreadId;
-      // An unchanged destination is not rechecked, so a task on an archived thread stays editable.
-      if (threadId !== null && threadId !== existingTask?.threadId) {
-        yield* requireDestinationThread(threadId, input.projectId, id);
-      }
-      // Refused on save rather than at run time; a disabled task can still be saved, so one
-      // stored above the ceiling can be turned off before its mode is lowered. A task bound to a
-      // thread runs in that thread's mode, which the orchestrator checks instead. Checked before
-      // the save consumes a webhook secret.
-      const modeDenial =
-        input.enabled && threadId === null
-          ? managedRuntimeModeDenial(managedPolicy.summary, input.runtimeMode)
-          : undefined;
-      if (modeDenial !== undefined) return yield* taskError(modeDenial, { taskId: id });
-      const creating = existingTask === null && !input.requireExisting;
-      const pausedBots =
-        input.enabled && creating ? yield* pausedBotsForSchedule(id, input.threadId ?? null) : [];
-      if (input.enabled && !creating) {
-        yield* assertBotScheduleCanEnable(id, input.threadId ?? null);
-        if (existingTask !== null) yield* assertBotScheduleCanEnable(id, existingTask.threadId);
-      }
-      // Keep the existing next_run_at when the schedule itself is untouched:
-      // editing a title or prompt must not postpone (or resurrect) a due
-      // run — only schedule/enabled changes restart the clock.
-      const schedule: ScheduledTask["schedule"] =
-        input.schedule.type === "webhook"
-          ? {
-              type: "webhook",
-              signature:
-                input.schedule.signature == null
-                  ? null
-                  : {
-                      header: input.schedule.signature.header.toLowerCase(),
-                      encoding: input.schedule.signature.encoding,
-                      prefix: input.schedule.signature.prefix,
-                    },
-              maxDeliveryAgeMinutes: input.schedule.maxDeliveryAgeMinutes ?? null,
-              ...(input.schedule.dedupe === undefined
-                ? existingTask?.schedule.type === "webhook" &&
-                  existingTask.schedule.dedupe !== undefined
-                  ? { dedupe: existingTask.schedule.dedupe }
-                  : {}
-                : { dedupe: input.schedule.dedupe }),
-              ...webhookFilters(
-                // Omitted keeps the stored filters, so a client that predates
-                // them can re-save a task without clearing them.
-                input.schedule.filters ??
-                  (existingTask?.schedule.type === "webhook"
-                    ? existingTask.schedule.filters
-                    : undefined),
-              ),
-            }
-          : input.schedule.type === "once"
-            ? { type: "once", runAt: iso(DateTime.makeUnsafe(input.schedule.runAt)) }
-            : input.schedule;
-      const webhook =
-        input.schedule.type === "webhook"
-          ? yield* Effect.gen(function* () {
-              const existing = existingTask === null ? null : yield* findWebhookCredentials(id);
-              const token = existing?.token ?? (yield* newWebhookToken);
-              const signature = input.schedule.type === "webhook" ? input.schedule.signature : null;
-              // A secretRef is a value the user entered for an agent; this
-              // save consumes it, so it cannot be used again. A replay of a
-              // save that already used it keeps the secret that save stored.
-              const replay = input.commandId !== undefined && existing?.secret != null;
-              const fromRef =
-                signature?.secretRef === undefined
-                  ? undefined
-                  : yield* secretRequests
-                      .consume({ ref: signature.secretRef, projectId: input.projectId })
-                      .pipe(
-                        Effect.catch((error) =>
-                          replay
-                            ? Effect.void
-                            : Effect.fail(taskError(error.message, { taskId: id })),
-                        ),
-                      );
-              // A ref, when given, is the only source: a plain secret sent
-              // alongside it must not replace what a replayed save stored.
-              const provided = signature?.secretRef === undefined ? signature?.secret : fromRef;
-              const secret = signature == null ? null : (provided ?? existing?.secret ?? null);
-              const secretChanged =
-                signature == null || provided !== undefined || existing === null;
-              if (signature != null && secret === null) {
-                return yield* taskError("A webhook signature check needs a signing secret.", {
-                  taskId: id,
-                });
               }
-              return { token, secret, secretChanged };
-            })
-          : { token: null, secret: null, secretChanged: true };
-      const enabled = input.enabled && pausedBots.length === 0;
-      const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
-        input.workspaceStrategy.type === "worktree" &&
-        ((yield* managedFolders.isScratchProject(input.projectId)) ||
-          (yield* threadLaunch.isNonGitProject(input.projectId)))
-          ? { type: "root" }
-          : input.workspaceStrategy;
-      const scheduleUnchanged =
-        existingTask !== null &&
-        existingTask.enabled === enabled &&
-        isSameSchedule(existingTask.schedule, schedule);
-      if (!scheduleUnchanged)
-        yield* requireFutureOnce({ enabled, schedule }, now, id);
-      const task: ScheduledTask = {
-        id,
-        title: input.title,
-        prompt: input.prompt,
-        enabled,
-        schedule,
-        ...keptCheckCommand(input.checkCommand, existingTask),
-        projectId: input.projectId,
-        threadId,
-        threadMode,
-        workspaceStrategy,
-        modelSelection: input.modelSelection,
-        runtimeMode: input.runtimeMode,
-        interactionMode: input.interactionMode,
-        createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
-        creationSource: input.creationSource ?? "web",
-        createdAt: existingTask?.createdAt ?? iso(now),
-        updatedAt: iso(now),
-        nextRunAt: scheduleUnchanged
-          ? existingTask.nextRunAt
-          : nextRunAt({ enabled, schedule }, now),
-        lastRunAt: existingTask?.lastRunAt ?? null,
-        lastRunStatus: existingTask?.lastRunStatus ?? "never",
-        lastRunError: existingTask?.lastRunError ?? null,
-        runCount: existingTask?.runCount ?? 0,
-      };
-      yield* saveTask(
-        task,
-        input.requireExisting === true,
-        scheduleUnchanged ? existingTask.schedule : null,
-        webhook,
-      );
-      for (const { bot, configPath } of pausedBots) {
-        yield* writeBotPauseFields(configPath, {
-          pausedScheduleIds: [...new Set([...(bot.pausedScheduleIds ?? []), id])],
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.mapError((cause) =>
-            taskError("Could not remember this task for bot resume.", { taskId: id, cause }),
-          ),
+            : input.schedule.type === "once"
+              ? { type: "once", runAt: iso(DateTime.makeUnsafe(input.schedule.runAt)) }
+              : input.schedule;
+        const webhook =
+          input.schedule.type === "webhook"
+            ? yield* Effect.gen(function* () {
+                const existing = existingTask === null ? null : yield* findWebhookCredentials(id);
+                const token = existing?.token ?? (yield* newWebhookToken);
+                const signature =
+                  input.schedule.type === "webhook" ? input.schedule.signature : null;
+                // A secretRef is a value the user entered for an agent; this
+                // save consumes it, so it cannot be used again. A replay of a
+                // save that already used it keeps the secret that save stored.
+                const replay = input.commandId !== undefined && existing?.secret != null;
+                const fromRef =
+                  signature?.secretRef === undefined
+                    ? undefined
+                    : yield* secretRequests
+                        .consume({ ref: signature.secretRef, projectId: input.projectId })
+                        .pipe(
+                          Effect.catch((error) =>
+                            replay
+                              ? Effect.void
+                              : Effect.fail(taskError(error.message, { taskId: id })),
+                          ),
+                        );
+                // A ref, when given, is the only source: a plain secret sent
+                // alongside it must not replace what a replayed save stored.
+                const provided = signature?.secretRef === undefined ? signature?.secret : fromRef;
+                const secret = signature == null ? null : (provided ?? existing?.secret ?? null);
+                const secretChanged =
+                  signature == null || provided !== undefined || existing === null;
+                if (signature != null && secret === null) {
+                  return yield* taskError("A webhook signature check needs a signing secret.", {
+                    taskId: id,
+                  });
+                }
+                return { token, secret, secretChanged };
+              })
+            : { token: null, secret: null, secretChanged: true };
+        const enabled = input.enabled && pausedBots.length === 0;
+        const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
+          input.workspaceStrategy.type === "worktree" &&
+          ((yield* managedFolders.isScratchProject(input.projectId)) ||
+            (yield* threadLaunch.isNonGitProject(input.projectId)))
+            ? { type: "root" }
+            : input.workspaceStrategy;
+        const scheduleUnchanged =
+          existingTask !== null &&
+          existingTask.enabled === enabled &&
+          isSameSchedule(existingTask.schedule, schedule);
+        if (!scheduleUnchanged) yield* requireFutureOnce({ enabled, schedule }, now, id);
+        const task: ScheduledTask = {
+          id,
+          title: input.title,
+          prompt: input.prompt,
+          enabled,
+          schedule,
+          ...keptCheckCommand(input.checkCommand, existingTask),
+          projectId: input.projectId,
+          threadId,
+          threadMode,
+          workspaceStrategy,
+          modelSelection: input.modelSelection,
+          runtimeMode: input.runtimeMode,
+          interactionMode: input.interactionMode,
+          createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
+          creationSource: input.creationSource ?? "web",
+          createdAt: existingTask?.createdAt ?? iso(now),
+          updatedAt: iso(now),
+          nextRunAt: scheduleUnchanged
+            ? existingTask.nextRunAt
+            : nextRunAt({ enabled, schedule }, now),
+          lastRunAt: existingTask?.lastRunAt ?? null,
+          lastRunStatus: existingTask?.lastRunStatus ?? "never",
+          lastRunError: existingTask?.lastRunError ?? null,
+          runCount: existingTask?.runCount ?? 0,
+        };
+        yield* saveTask(
+          task,
+          input.requireExisting === true,
+          scheduleUnchanged ? existingTask.schedule : null,
+          webhook,
         );
-      }
-      yield* notifyChanged;
-      return { task: (yield* findTask(id)) ?? task };
-    }, (effect) => withBotPauseLock(effect));
+        for (const { bot, configPath } of pausedBots) {
+          yield* writeBotPauseFields(configPath, {
+            pausedScheduleIds: [...new Set([...(bot.pausedScheduleIds ?? []), id])],
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.mapError((cause) =>
+              taskError("Could not remember this task for bot resume.", { taskId: id, cause }),
+            ),
+          );
+        }
+        yield* notifyChanged;
+        return { task: (yield* findTask(id)) ?? task };
+      },
+      (effect) => withBotPauseLock(effect),
+    );
 
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = Effect.fn(
       "ScheduledTaskService.setEnabled",
-    )(function* (input) {
-      const existing = yield* loadTask(input.id);
-      if (input.enabled && !(yield* BotSchedulePauseTransition))
-        yield* assertBotScheduleCanEnable(input.id, existing.threadId);
-      if (existing.enabled === input.enabled) return { task: existing };
-      if (
-        input.enabled &&
-        existing.schedule.type === "webhook" &&
-        webhookPolicyBlock !== undefined
-      ) {
-        return yield* taskError(webhookPolicyBlock, { taskId: input.id });
-      }
-      const modeDenial =
-        input.enabled && existing.threadId === null
-          ? managedRuntimeModeDenial(managedPolicy.summary, existing.runtimeMode)
-          : undefined;
-      if (modeDenial !== undefined) {
-        return yield* taskError(modeDenial, { taskId: input.id });
-      }
-      const now = yield* localNow;
-      yield* requireFutureOnce(
-        { enabled: input.enabled, schedule: existing.schedule },
-        now,
-        input.id,
-      );
-      const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
-      // RETURNING so a task deleted between the load and this UPDATE is a
-      // visible not-found error, not a false success.
-      const updated = yield* sql<{ task_id: string }>`
+    )(
+      function* (input) {
+        const existing = yield* loadTask(input.id);
+        if (input.enabled && !(yield* BotSchedulePauseTransition))
+          yield* assertBotScheduleCanEnable(input.id, existing.threadId);
+        if (existing.enabled === input.enabled) return { task: existing };
+        if (
+          input.enabled &&
+          existing.schedule.type === "webhook" &&
+          webhookPolicyBlock !== undefined
+        ) {
+          return yield* taskError(webhookPolicyBlock, { taskId: input.id });
+        }
+        const modeDenial =
+          input.enabled && existing.threadId === null
+            ? managedRuntimeModeDenial(managedPolicy.summary, existing.runtimeMode)
+            : undefined;
+        if (modeDenial !== undefined) {
+          return yield* taskError(modeDenial, { taskId: input.id });
+        }
+        const now = yield* localNow;
+        yield* requireFutureOnce(
+          { enabled: input.enabled, schedule: existing.schedule },
+          now,
+          input.id,
+        );
+        const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+        // RETURNING so a task deleted between the load and this UPDATE is a
+        // visible not-found error, not a false success.
+        const updated = yield* sql<{ task_id: string }>`
           UPDATE scheduled_tasks
           SET enabled = ${input.enabled ? 1 : 0},
               next_run_at = ${next},
@@ -1805,18 +1815,20 @@ ${checkOutput}` : basePrompt;
           WHERE task_id = ${input.id}
           RETURNING task_id
         `.pipe(
-        Effect.mapError((cause) =>
-          taskError("Could not update schedule task.", { taskId: input.id, cause }),
-        ),
-      );
-      if (updated.length === 0) {
-        return yield* taskError("Schedule task not found.", { taskId: input.id });
-      }
-      yield* notifyChanged;
-      return {
-        task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
-      };
-    }, (effect) => withBotPauseLock(effect));
+          Effect.mapError((cause) =>
+            taskError("Could not update schedule task.", { taskId: input.id, cause }),
+          ),
+        );
+        if (updated.length === 0) {
+          return yield* taskError("Schedule task not found.", { taskId: input.id });
+        }
+        yield* notifyChanged;
+        return {
+          task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
+        };
+      },
+      (effect) => withBotPauseLock(effect),
+    );
 
     const forgetWebhookTask = (id: ScheduledTaskId) =>
       Effect.all(
