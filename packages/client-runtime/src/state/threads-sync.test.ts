@@ -1082,7 +1082,7 @@ describe("EnvironmentThreads", () => {
         expect((yield* SubscriptionRef.get(harness.threadState)).history.loading).toBe(false);
       }),
     );
-    it.effect("loads bot conversation without consuming the full thread's work cursor", () =>
+    it.effect("loads past hidden bot wakes without consuming the work cursor", () =>
       Effect.gen(function* () {
         const prompt = {
           ...command("owner", "completed", 0, 0),
@@ -1120,11 +1120,10 @@ describe("EnvironmentThreads", () => {
           }),
         });
         expect(yield* harness.loadEarlier(undefined, true)).toEqual({ _tag: "loaded" });
-        expect(
-          (yield* SubscriptionRef.get(harness.threadState)).history.conversation,
-        ).toMatchObject({ historyCursor: "owner", hasMoreHistory: true });
-        expect(yield* harness.loadEarlier(undefined, true)).toEqual({ _tag: "loaded" });
         const state = yield* SubscriptionRef.get(harness.threadState);
+        expect(
+          Option.getOrThrow(state.data).visibleTurnItems.map((row) => row.sourceItemId),
+        ).toContain("owner");
         expect(state.history).toMatchObject({
           historyCursor: "older",
           hasMoreHistory: true,

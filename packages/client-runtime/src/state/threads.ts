@@ -801,7 +801,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ? page.nextCursor !== null
               : throughEntryId === undefined &&
                 page.hasMoreHistory &&
-                !page.items.some(({ item }) => startsTurn(item)));
+                !page.items.some(({ item }) =>
+                  conversationOnly
+                    ? item.type === "user_message" &&
+                      item.createdBy === "user" &&
+                      item.senderThreadId === undefined &&
+                      item.scheduledTaskId === undefined
+                    : startsTurn(item),
+                ));
           if (keepPaging && (page.nextCursor === null || page.nextCursor === requestCursor))
             return yield* failLoad(
               workAnchorId === undefined
