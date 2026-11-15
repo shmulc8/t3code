@@ -687,6 +687,7 @@ it.effect("a refused dispatch records its refusal, and opaque causes stay generi
     ] as const;
     const failure = yield* Ref.make<unknown>(undefined);
     const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(NodeServices.layer),
       Layer.provide(
         Layer.mergeAll(
           ManagedPolicy.layerTest(),

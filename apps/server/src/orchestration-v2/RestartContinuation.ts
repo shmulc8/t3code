@@ -286,6 +286,7 @@ const deliverRestartContinuation = Effect.fn("RestartContinuation.deliverRestart
         !cancelledBeforeStart(run) &&
         runRanAfter(run, source),
     );
+    if (laterRuns.some((run) => run.restartContinuationOfRunId === source.id)) return false;
     if (input.resendOnly && laterRuns.length === 0) return false;
     if (projection.thread.providerInstanceId !== source.providerInstanceId) return false;
     // A turn that keeps crashing the server would otherwise restart it forever.
