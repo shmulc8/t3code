@@ -122,9 +122,11 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
           );
           yield* writeTextFile(path.join(sharedHome, "auth.json"), '{"shared":true}\n');
           yield* writeTextFile(path.join(sharedHome, "auth.lock"), "");
+          yield* writeTextFile(path.join(sharedHome, "auth.json.lock"), "shared lock");
           yield* fileSystem.makeDirectory(shadowHome, { recursive: true });
           yield* writeTextFile(path.join(shadowHome, "auth.json"), '{"shadow":true}\n');
           yield* writeTextFile(path.join(shadowHome, "auth.lock"), "");
+          yield* writeTextFile(path.join(shadowHome, "auth.json.lock"), "shadow lock");
           yield* fileSystem.symlink(
             path.join(sharedHome, "models_cache.json"),
             path.join(shadowHome, "models_cache.json"),
@@ -162,6 +164,22 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
           expect(authLinkResult._tag).toBe("Failure");
           expect(authContents).toContain("shadow");
           expect(authLockLinkResult._tag).toBe("Failure");
+          expect(yield* fileSystem.readFileString(path.join(shadowHome, "auth.json.lock"))).toBe(
+            "shadow lock",
+          );
+          expect(yield* fileSystem.readFileString(path.join(sharedHome, "auth.json.lock"))).toBe(
+            "shared lock",
+          );
+          yield* fileSystem.remove(path.join(shadowHome, "auth.json.lock"));
+          yield* fileSystem.symlink(
+            path.join(sharedHome, "auth.json.lock"),
+            path.join(shadowHome, "auth.json.lock"),
+          );
+          yield* materializeCodexShadowHome(layout);
+          expect(yield* fileSystem.exists(path.join(shadowHome, "auth.json.lock"))).toBe(false);
+          expect(yield* fileSystem.readFileString(path.join(sharedHome, "auth.json.lock"))).toBe(
+            "shared lock",
+          );
         }),
     );
 

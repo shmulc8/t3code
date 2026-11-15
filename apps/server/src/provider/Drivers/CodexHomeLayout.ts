@@ -30,7 +30,12 @@ const KNOWN_SHARED_DIRECTORIES = [
 ] as const;
 
 // auth.lock guards the shadow home's private auth.json.
-const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "auth.lock", "models_cache.json"]);
+const PRIVATE_ENTRY_NAMES = new Set([
+  "auth.json",
+  "auth.lock",
+  "auth.json.lock",
+  "models_cache.json",
+]);
 // Finder maintains metadata separately for each directory, including shadow homes.
 const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "memories.lock", "tmp", ".DS_Store"]);
 // Shadow homes may create local runtime locks first; replace them with shared links because they guard shared state.
