@@ -816,13 +816,12 @@ function ThreadDetailBody(
       return { kind: "compacting" };
     }
     if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
-      return props.workingLabel
-        ? { kind: "syncing", label: props.workingLabel }
-        : {
-            kind: "working",
-            environmentId: props.environmentId,
-            startedAt: props.activeWorkStartedAt,
-          };
+      return {
+        kind: "working",
+        environmentId: props.environmentId,
+        startedAt: props.activeWorkStartedAt,
+        label: props.workingLabel,
+      };
     }
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {

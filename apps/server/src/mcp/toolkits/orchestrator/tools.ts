@@ -232,7 +232,8 @@ const NotifyOwnerTool = Tool.make("notify_owner", {
 })
   .annotate(Tool.Title, "Notify the bot owner")
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true);
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const openItemDependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -250,7 +251,8 @@ const OpenItemAddTool = Tool.make("open_item_add", {
   dependencies: openItemDependencies,
 })
   .annotate(Tool.Title, "Add an open item")
-  .annotate(Tool.Destructive, false);
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const OpenItemUpdateTool = Tool.make("open_item_update", {
   description:
@@ -262,7 +264,8 @@ const OpenItemUpdateTool = Tool.make("open_item_update", {
   dependencies: openItemDependencies,
 })
   .annotate(Tool.Title, "Update an open item")
-  .annotate(Tool.Destructive, false);
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const OpenItemResolveTool = Tool.make("open_item_resolve", {
   description:
@@ -274,7 +277,8 @@ const OpenItemResolveTool = Tool.make("open_item_resolve", {
   dependencies: openItemDependencies,
 })
   .annotate(Tool.Title, "Resolve an open item")
-  .annotate(Tool.Destructive, false);
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const OpenItemListTool = Tool.make("open_item_list", {
   description:

@@ -2561,9 +2561,11 @@ it.effect(
           );
           expect(outside.isError).toBe(true);
           expect(toJson(outside.content)).toContain("requires a bot home thread");
-          expect((yield* call({ body: "Notify" }, { ...scope, thread: undefined })).isError).toBe(
-            true,
-          );
+          const outsideClientError = yield* call(
+            { body: "Notify" },
+            { ...scope, thread: undefined },
+          ).pipe(Effect.flip);
+          expect(outsideClientError.message).toContain("Tool 'notify_owner' not found");
           expect(
             (yield* call({ body: "Notify" }, { ...scope, capabilities: new Set() })).isError,
           ).toBe(true);

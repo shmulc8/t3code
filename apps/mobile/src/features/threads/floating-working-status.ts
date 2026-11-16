@@ -9,7 +9,12 @@ export interface FloatingStatusAction {
 }
 
 export type FloatingWorkingStatus =
-  | { readonly kind: "working"; readonly environmentId: EnvironmentId; readonly startedAt: string }
+  | {
+      readonly kind: "working";
+      readonly environmentId: EnvironmentId;
+      readonly startedAt: string;
+      readonly label?: string | null;
+    }
   | { readonly kind: "compacting" }
   | {
       readonly kind: "child-input";
