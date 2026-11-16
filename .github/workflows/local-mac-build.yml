@@ -1,0 +1,23 @@
+name: Local macOS build
+on:
+  workflow_dispatch:
+  push:
+    branches: [local-mac-build]
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-ci-deps
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build DMG
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: vp run dist:desktop:dmg:arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3code-mac-arm64
+          path: |
+            release/*.dmg
+          retention-days: 7
